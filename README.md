@@ -1,28 +1,34 @@
 # migrate-unifi-firewalla
 
-Migrate a UniFi Network controller on a **Firewalla Gold-series** box from the community [mbierman/unifi-installer-for-Firewalla](https://github.com/mbierman/unifi-installer-for-Firewalla) layout (`jacobalberty/unifi`) to:
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-- `lscr.io/linuxserver/unifi-network-application` (pinned default: **10.6.101**)
-- `docker.io/mongo:4.4` or `7.0` (4.4 on Golds without AVX)
+Migrate a UniFi Network controller on a **Firewalla Gold-series** router from the community [mbierman installer](https://github.com/mbierman/unifi-installer-for-Firewalla) (`jacobalberty/unifi`) to:
 
-**Inform address stays `172.16.1.2`.** Adopted APs and switches keep talking to the same IP. `/data/unifi` and the jacobalberty image are never deleted (rollback).
+| Role | Image | Default tag |
+|---|---|
+| Network Application | `lscr.io/linuxserver/unifi-network-application` | `10.6.101` |
+| Database | `docker.io/mongo` | `4.4` on Golds without AVX, else `7.0` |
 
-Script version: **v1.11**
+**Inform address stays `172.16.1.2`.** Adopted APs and switches keep talking to the same IP. The old tree `/data/unifi` and the jacobalberty image are **never deleted**, so you can roll back.
+
+Current script: **v1.11**
+
+> Official UniFi mobile apps no longer support classic self-hosted Network. The web UI at `https://172.16.1.2:8443` still works. This project does **not** install UniFi OS Server (it does not fit a 4 GB Firewalla).
 
 ## Who this is for
 
-- Firewalla Gold / Gold Plus / Gold Pro / Gold SE
+- Firewalla **Gold / Gold Plus / Gold Pro / Gold SE**
 - UniFi already installed with the mbierman Docker installer
-- You want a current Network Application release and a separate MongoDB
+- You want a current Network Application build and a separate MongoDB
 
-This is **not** UniFi OS Server. Official mobile apps have dropped classic self-hosted Network. The web UI at `https://172.16.1.2:8443` still works. Do not put UniFi OS Server on a 4 GB Firewalla.
+Not for: Cloud Key, UniFi OS consoles, Raspberry Pi-only images, or a first-time UniFi install (use mbierman first).
 
 ## What it does not touch
 
-- `/data/unifi` (old install = rollback)
+- `/data/unifi` (old install = rollback source)
 - `jacobalberty/unifi` image
-- Firewalla routing except `172.16.1.0/24` on `unifi_default` (same as the installer)
-- Gold-SE MASQUERADE in `start_unifi.sh`
+- Firewalla WAN / LAN policy except `172.16.1.0/24` on `unifi_default`
+- Gold-SE MASQUERADE rules in `start_unifi.sh`
 
 ## Quick start
 
@@ -31,10 +37,10 @@ On a laptop:
 ```bash
 curl -fsSL -o migrate-unifi-firewalla.sh \
   https://raw.githubusercontent.com/randall-zapata/migrate-unifi-firewalla/main/migrate-unifi-firewalla.sh
-scp migrate-unifi-firewalla.sh pi@<firewalla>:/tmp/
+scp migrate-unifi-firewalla.sh pi@<firewalla-ip>:/tmp/
 ```
 
-On the Firewalla (user `pi`):
+On the Firewalla as user `pi`:
 
 ```bash
 chmod 755 /tmp/migrate-unifi-firewalla.sh
@@ -42,61 +48,64 @@ bash /tmp/migrate-unifi-firewalla.sh --preflight
 bash /tmp/migrate-unifi-firewalla.sh
 ```
 
-Use a **local** UniFi admin (not ui.com SSO) when asked so the script can take a **fresh** `.unf`. Type `SKIP` only if you accept the newest file under `/data/unifi/data/backup/autobackup/` (must be < 48 hours old unless you pass `--allow-stale-backup`).
+Use a **local** UniFi admin (not ui.com SSO) so the script can take a fresh `.unf`. Type `SKIP` only if you accept the newest file under `/data/unifi/data/backup/autobackup/` (must be under 48 hours old unless `--allow-stale-backup`). Empty username is ignored.
 
-After the script finishes:
+## After cutover
 
 1. Open `https://172.16.1.2:8443`
-2. Restore the **newest original** `.unf` from `/data/unifi/data/backup/autobackup/` (filename date `YYYYMMDD`, not a copy under `/data/unifi-migration`)
-3. On a 4 GB Gold, prefer a **settings-only** restore if the wizard offers it
+2. Restore the newest **original** `.unf` from `/data/unifi/data/backup/autobackup/` (filename date `YYYYMMDD`)
+3. On a 4 GB Gold, prefer settings-only
 4. Confirm Inform Host is still `172.16.1.2`
 
-Do **not** re-run the migrator if `unifi` is already `linuxserver/unifi-network-application`. Use the helpers it writes:
-
-| Helper | Path |
-|---|---|
-| Restore `.unf` | `~/.firewalla/run/docker/unifi/unifi-restore.sh FILE.unf` |
-| Update app | `~/.firewalla/run/docker/unifi/unifi-update.sh --i-have-a-backup` |
-| Status | `~/.firewalla/run/docker/unifi/unifi-status.sh` |
-| Roll back to jacobalberty | `~/.firewalla/run/docker/unifi/rollback.sh` |
-
-## Useful flags
-
-```text
---preflight              checks only
---backup-file PATH       use this .unf
---settings-only          API backup without stats history
---allow-stale-backup     allow a .unf older than 48 hours
---cleanup / --cleanup-only
---wipe-new-data          wipe leftover /data/unifi-app and /data/unifi-db
---mongo-tag 4.4          required on Gold x86_64 without AVX
---unifi-tag 10.6.101
---auto                   -y + restore attempt + cleanup; still needs a local admin or --backup-file
-```
-
-## Disk and RAM (Gold)
-
-Images live on **`/var/lib/docker`**, not `/data`. `/data` only needs the new app + db dirs while `/data/unifi` stays.
-
-Typical Gold: ~4 GB RAM, ~1 GB free while the old controller is running. Restore **settings-only**. Mongo is capped at 0.5 GB WiredTiger cache. Do not move Mongo to `7.0` on a CPU without AVX.
-
-## After cutover checks
+Do not re-run the migrator if the container is already linuxserver. Use the helpers in `/home/pi/.firewalla/run/docker/unifi/`.
 
 ```bash
 curl -k -s -o /dev/null -w "UI %{http_code}\n" https://172.16.1.2:8443/
 curl -s -o /dev/null -w "inform %{http_code}\n" http://172.16.1.2:8080/inform
-# inform 400 from curl is normal (empty GET)
+# inform 400 from empty curl GET is normal
 ip route show table lan_routable | grep 172.16.1
 ```
 
-## Design
+## Flags
 
-Read [MIGRATION-DESIGN.md](MIGRATION-DESIGN.md) before changing invariants (`172.16.1.2`, `unifi_default`, compose schema `"3"`, Firewalla `docker-compose` 1.x).
+| Flag | Meaning |
+|---|---|
+| `--preflight` | Checks only |
+| `--backup-file PATH` | Use this `.unf` |
+| `--settings-only` | API backup without stats |
+| `--allow-stale-backup` | Allow `.unf` older than 48h |
+| `--cleanup` / `--cleanup-only` | Safe `/data` cleanup (never `/data/unifi`) |
+| `--wipe-new-data` | Wipe leftover new app/db dirs |
+| `--mongo-tag 4.4` | Required without AVX |
+| `--unifi-tag 10.6.101` | Pin linuxserver tag |
+| `--auto` | `-y` + restore attempt + cleanup |
+| `-y` | Confirm prompts |
+
+## Helpers on the box
+
+| Helper | Path |
+|---|---|
+| Restore | `/home/pi/.firewalla/run/docker/unifi/unifi-restore.sh FILE.unf` |
+| Update | `/home/pi/.firewalla/run/docker/unifi/unifi-update.sh --i-have-a-backup` |
+| Status | `/home/pi/.firewalla/run/docker/unifi/unifi-status.sh` |
+| Rollback | `/home/pi/.firewalla/run/docker/unifi/rollback.sh` |
+
+## Disk and RAM
+
+Images live on `/var/lib/docker`. New data is `/data/unifi-app` and `/data/unifi-db`. Leave `/data/unifi` for rollback. Typical Gold has ~1 GB free RAM — restore settings-only. Do not move Mongo to 7.0 without AVX.
+
+## Docs
+
+- [docs/USAGE.md](docs/USAGE.md)
+- [docs/SAFETY.md](docs/SAFETY.md)
+- [MIGRATION-DESIGN.md](MIGRATION-DESIGN.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Disclaimer
 
-Community script. No warranty. Test on one site, keep `/data/unifi` until devices look adopted. Not affiliated with Ubiquiti or Firewalla.
+Community script. No warranty. Not affiliated with Ubiquiti or Firewalla.
 
 ## License
 
-MIT
+[MIT](LICENSE)
